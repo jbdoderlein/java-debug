@@ -22,6 +22,7 @@ import java.util.logging.Logger;
 
 import org.apache.commons.lang3.StringUtils;
 
+import com.google.gson.JsonObject;
 import com.microsoft.java.debug.core.Configuration;
 import com.microsoft.java.debug.core.DebugException;
 import com.microsoft.java.debug.core.DebugSettings;
@@ -37,6 +38,7 @@ import com.microsoft.java.debug.core.adapter.variables.StackFrameReference;
 import com.microsoft.java.debug.core.adapter.variables.VariableDetailUtils;
 import com.microsoft.java.debug.core.adapter.variables.VariableProxy;
 import com.microsoft.java.debug.core.adapter.variables.VariableUtils;
+import com.microsoft.java.debug.core.protocol.Events.TelemetryEvent;
 import com.microsoft.java.debug.core.protocol.Messages.Response;
 import com.microsoft.java.debug.core.protocol.Requests.Arguments;
 import com.microsoft.java.debug.core.protocol.Requests.Command;
@@ -83,8 +85,8 @@ public class EvaluateRequestHandler implements IDebugRequestHandler {
                     "Evaluation failed because the thread is not suspended.",
                     ErrorCode.EVALUATE_NOT_SUSPENDED_THREAD));
         }
-
         return CompletableFuture.supplyAsync(() -> {
+            long asyncStartTime = System.nanoTime();
             IEvaluationProvider engine = context.getProvider(IEvaluationProvider.class);
             try {
                 Value value = engine.evaluate(expression, stackFrameReference.getThread(), stackFrameReference.getDepth()).get();
@@ -167,6 +169,12 @@ public class EvaluateRequestHandler implements IDebugRequestHandler {
                 // for primitive value
                 response.body = new Responses.EvaluateResponseBody(variableFormatter.valueToString(value, options), 0,
                         variableFormatter.typeToString(value == null ? null : value.type(), options), 0);
+                long asyncEndTime = System.nanoTime();
+                JsonObject perf = new JsonObject();
+                perf.addProperty("command", "evaluate");
+                perf.addProperty("duration", (asyncEndTime - asyncStartTime));
+                context.getProtocolServer().sendEvent(new TelemetryEvent("dap", perf));
+                logger.info("JBDEBUG : Handle Async EvaluateRequestHandler in " + (asyncEndTime - asyncStartTime)/1000000 + " ms");
                 return response;
             } catch (InterruptedException | ExecutionException e) {
                 Throwable cause = e;

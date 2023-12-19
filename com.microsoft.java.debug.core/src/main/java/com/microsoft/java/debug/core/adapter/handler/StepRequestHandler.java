@@ -17,10 +17,13 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.logging.Logger;
 
 import org.apache.commons.lang3.ArrayUtils;
 
+import com.google.gson.JsonObject;
 import com.microsoft.java.debug.core.AsyncJdwpUtils;
+import com.microsoft.java.debug.core.Configuration;
 import com.microsoft.java.debug.core.DebugEvent;
 import com.microsoft.java.debug.core.DebugUtility;
 import com.microsoft.java.debug.core.IDebugSession;
@@ -32,6 +35,7 @@ import com.microsoft.java.debug.core.adapter.IDebugAdapterContext;
 import com.microsoft.java.debug.core.adapter.IDebugRequestHandler;
 import com.microsoft.java.debug.core.adapter.ISourceLookUpProvider.MethodInvocation;
 import com.microsoft.java.debug.core.protocol.Events;
+import com.microsoft.java.debug.core.protocol.Events.TelemetryEvent;
 import com.microsoft.java.debug.core.protocol.Messages.Response;
 import com.microsoft.java.debug.core.protocol.Requests.Arguments;
 import com.microsoft.java.debug.core.protocol.Requests.Command;
@@ -64,6 +68,8 @@ import io.reactivex.disposables.Disposable;
 
 public class StepRequestHandler implements IDebugRequestHandler {
 
+    private static final Logger logger = Logger.getLogger(Configuration.LOGGER_NAME);
+
     @Override
     public List<Command> getTargetCommands() {
         return Arrays.asList(Command.STEPIN, Command.STEPOUT, Command.NEXT);
@@ -72,14 +78,20 @@ public class StepRequestHandler implements IDebugRequestHandler {
     @Override
     public CompletableFuture<Response> handle(Command command, Arguments arguments, Response response,
             IDebugAdapterContext context) {
+        long startTime = System.nanoTime();
         if (context.getDebugSession() == null) {
             return AdapterUtils.createAsyncErrorResponse(response, ErrorCode.EMPTY_DEBUG_SESSION, "Debug Session doesn't exist.");
         }
-
+        long start1Time, start2Time, start3Time, start4Time, start5Time;
+        start2Time = System.nanoTime();
+        start3Time = System.nanoTime();
+        start4Time = System.nanoTime();
+        start5Time = System.nanoTime();
         StepArguments stepArguments = (StepArguments) arguments;
         long threadId = stepArguments.threadId;
         int targetId = (stepArguments instanceof StepInArguments) ? ((StepInArguments) stepArguments).targetId : 0;
         ThreadReference thread = context.getThreadCache().getThread(threadId);
+        start1Time = System.nanoTime();
         if (thread == null) {
             thread = DebugUtility.getThread(context.getDebugSession(), threadId);
         }
@@ -87,6 +99,7 @@ public class StepRequestHandler implements IDebugRequestHandler {
             JdiExceptionReference exception = context.getExceptionManager().removeException(threadId);
             context.getStepResultManager().removeMethodResult(threadId);
             try {
+                start2Time = System.nanoTime();
                 final ThreadReference targetThread = thread;
                 ThreadState threadState = new ThreadState();
                 threadState.threadId = threadId;
@@ -99,7 +112,7 @@ public class StepRequestHandler implements IDebugRequestHandler {
                     .subscribe(debugEvent -> {
                         handleDebugEvent(debugEvent, context.getDebugSession(), context, threadState);
                     });
-
+                
                 if (command == Command.STEPIN) {
                     threadState.pendingStepRequest = DebugUtility.createStepIntoRequest(thread,
                         context.getStepFilters().allowClasses,
@@ -117,10 +130,13 @@ public class StepRequestHandler implements IDebugRequestHandler {
 
                 threadState.targetStepIn = targetId > 0
                     ? (MethodInvocation) context.getRecyclableIdPool().getObjectById(targetId) : null;
+
+                start3Time = System.nanoTime();
                 if (context.asyncJDWP()) {
                     List<CompletableFuture<Void>> futures = new ArrayList<>();
                     futures.add(AsyncJdwpUtils.runAsync(() -> {
                         // JDWP Command: TR_FRAMES
+                        logger.severe("JBDEBUG : Handle Step Request - TR_FRAMES");
                         try {
                             threadState.topFrame = getTopFrame(targetThread);
                             threadState.stepLocation = threadState.topFrame.location();
@@ -139,22 +155,34 @@ public class StepRequestHandler implements IDebugRequestHandler {
                         } catch (IncompatibleThreadStateException e1) {
                             throw new CompletionException(e1);
                         }
+                        logger.severe("JBDEBUG : Handle Step Request - TR_FRAMES - End");
                     }));
                     futures.add(AsyncJdwpUtils.runAsync(
                         // JDWP Command: OR_IS_COLLECTED
-                        () -> threadState.pendingMethodExitRequest.addThreadFilter(targetThread)
+                        () -> {
+                            logger.severe("JBDEBUG : Handle Step Request - OR_IS_COLLECTED");
+                            threadState.pendingMethodExitRequest.addThreadFilter(targetThread);
+                            logger.severe("JBDEBUG : Handle Step Request - OR_IS_COLLECTED - End");
+                        }
                     ));
                     futures.add(AsyncJdwpUtils.runAsync(() -> {
                         try {
                             // JDWP Command: TR_FRAME_COUNT
+                            logger.severe("JBDEBUG : Handle Step Request - TR_FRAME_COUNT");
                             threadState.stackDepth = targetThread.frameCount();
+                            logger.severe("JBDEBUG : Handle Step Request - TR_FRAME_COUNT - End");
                         } catch (IncompatibleThreadStateException e) {
                             throw new CompletionException(e);
                         }
                     }));
                     futures.add(
                         // JDWP Command: ER_SET
-                        AsyncJdwpUtils.runAsync(() -> threadState.pendingStepRequest.enable())
+                        AsyncJdwpUtils.runAsync(() -> {
+                            logger.severe("JBDEBUG : Handle Step Request - ER_SET");
+                            threadState.pendingStepRequest.enable();
+                            logger.severe("JBDEBUG : Handle Step Request - ER_SET - End");
+                        }
+                        )
                     );
 
                     try {
@@ -187,10 +215,11 @@ public class StepRequestHandler implements IDebugRequestHandler {
                     threadState.pendingStepRequest.enable();
                     threadState.pendingMethodExitRequest.enable();
                 }
-
+                start4Time = System.nanoTime();
                 context.getThreadCache().removeEventThread(thread.uniqueID());
                 DebugUtility.resumeThread(thread);
                 ThreadsRequestHandler.checkThreadRunningAndRecycleIds(thread, context);
+                start5Time = System.nanoTime();
             } catch (IncompatibleThreadStateException ex) {
                 // Roll back the Exception info if stepping fails.
                 context.getExceptionManager().setException(threadId, exception);
@@ -217,7 +246,27 @@ public class StepRequestHandler implements IDebugRequestHandler {
                     ex.getCause() != null ? ex.getCause() : ex);
             }
         }
-
+        long endTime = System.nanoTime();
+        JsonObject perf = new JsonObject();
+        // THis is useless
+        perf.addProperty("command", "stepHandlerTelemetry");
+        perf.addProperty("duration", (endTime - startTime));
+        perf.addProperty("duration_parse_arg", (start1Time - startTime));
+        perf.addProperty("duration_setup_step_handler", (start3Time - start2Time));
+        perf.addProperty("duration_setup_other", (start4Time - start3Time));
+        perf.addProperty("duration_resume", (start5Time - start4Time));
+        perf.addProperty("timer_start", startTime);
+        perf.addProperty("timer_end", endTime);
+        perf.addProperty("version", 1);
+        context.getProtocolServer().sendEvent(new TelemetryEvent("jb", perf));
+        logger.info("JBDEBUG : Handle Step Request, total = " + 
+            (endTime - startTime)/1000000 + " ms ( " +
+            (start1Time - startTime)/1000000 + " ms + " +
+            (start2Time - start1Time)/1000000 + " ms + " +
+            (start3Time - start2Time)/1000000 + " ms + " +
+            (start4Time - start3Time)/1000000 + " ms + " +
+            (start5Time - start4Time)/1000000 + " ms + " +
+            (endTime - start5Time)/1000000 + " ms )");
         return CompletableFuture.completedFuture(response);
     }
 
@@ -244,6 +293,7 @@ public class StepRequestHandler implements IDebugRequestHandler {
                 }
             }
         } else if (event instanceof StepEvent) {
+            long startTime = System.nanoTime();
             ThreadReference thread = ((StepEvent) event).thread();
             long threadId = thread.uniqueID();
             threadState.deleteStepRequest(eventRequestManager);
@@ -308,6 +358,13 @@ public class StepRequestHandler implements IDebugRequestHandler {
             if (threadState.eventSubscription != null) {
                 threadState.eventSubscription.dispose();
             }
+            long endTime = System.nanoTime();
+            JsonObject perf = new JsonObject();
+            perf.addProperty("command", "stepHandlerTelemetryStop");
+            perf.addProperty("duration", (endTime - startTime));
+            perf.addProperty("timer_start", startTime);
+            perf.addProperty("timer_end", endTime);
+            context.getProtocolServer().sendEvent(new TelemetryEvent("jb", perf));
             context.getThreadCache().addEventThread(thread, "step");
             context.getProtocolServer().sendEvent(new Events.StoppedEvent("step", thread.uniqueID()));
             debugEvent.shouldResume = false;

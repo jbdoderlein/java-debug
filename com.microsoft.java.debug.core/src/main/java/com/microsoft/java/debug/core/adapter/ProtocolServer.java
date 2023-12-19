@@ -19,12 +19,14 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
+import com.google.gson.JsonObject;
 import com.microsoft.java.debug.core.Configuration;
 import com.microsoft.java.debug.core.DebugException;
 import com.microsoft.java.debug.core.UsageDataSession;
 import com.microsoft.java.debug.core.protocol.AbstractProtocolServer;
 import com.microsoft.java.debug.core.protocol.Events.DebugEvent;
 import com.microsoft.java.debug.core.protocol.Events.StoppedEvent;
+import com.microsoft.java.debug.core.protocol.Events.TelemetryEvent;
 import com.microsoft.java.debug.core.protocol.Messages;
 import com.sun.jdi.VMDisconnectedException;
 
@@ -124,11 +126,17 @@ public class ProtocolServer extends AbstractProtocolServer {
     @Override
     protected void dispatchRequest(Messages.Request request) {
         usageDataSession.recordRequest(request);
+        JsonObject perf = new JsonObject();
+        perf.addProperty("command", "dispatcher_start_"+request.command);
+        perf.addProperty("time", System.nanoTime());
+        super.sendEvent(new TelemetryEvent("dap", perf));
+        
+        // request.command, System.nanoTime()
         try {
             synchronized (lock) {
                 this.isDispatchingRequest = true;
             }
-
+            
             debugAdapter.dispatchRequest(request).thenCompose((response) -> {
                 CompletableFuture<Void> future = new CompletableFuture<>();
                 if (response != null) {
@@ -169,9 +177,14 @@ public class ProtocolServer extends AbstractProtocolServer {
             synchronized (lock) {
                 this.isDispatchingRequest = false;
             }
-
+            JsonObject perf2 = new JsonObject();
+            perf2.addProperty("command", "dispatcher_end_"+request.command);
+            perf2.addProperty("time", System.nanoTime());
+            super.sendEvent(new TelemetryEvent("dap", perf2));
+            //debugAdapter.send_time_over_telemetry("End dispatchRequest"+request.command, System.nanoTime());
             while (this.eventQueue.peek() != null) {
                 super.sendEvent(this.eventQueue.poll());
+                
             }
         }
     }
