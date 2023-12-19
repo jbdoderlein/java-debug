@@ -33,9 +33,11 @@ import java.util.logging.Logger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.google.gson.JsonObject;
 import com.microsoft.java.debug.core.adapter.AdapterUtils;
 import com.microsoft.java.debug.core.adapter.ErrorCode;
 import com.microsoft.java.debug.core.protocol.Events.DebugEvent;
+import com.microsoft.java.debug.core.protocol.Events.TelemetryEvent;
 
 import io.reactivex.disposables.Disposable;
 import io.reactivex.schedulers.Schedulers;
@@ -221,6 +223,12 @@ public abstract class AbstractProtocolServer implements IProtocolServer {
                         if (message.type.equals("request")) {
                             Messages.Request request = JsonUtils.fromJson(messageData, Messages.Request.class);
                             if (this.isValidDAPRequest) {
+                                JsonObject telemetry = new JsonObject();
+                                telemetry.addProperty("command", request.command);
+                                telemetry.addProperty("status","start");
+                                telemetry.addProperty("seq", request.seq);
+                                telemetry.addProperty("timestamp", System.nanoTime());
+                                sendEvent(new TelemetryEvent("jb", telemetry));
                                 requestSubject.onNext(request);
                             } else {
                                 Messages.Response response = new Messages.Response(request.seq, request.command);

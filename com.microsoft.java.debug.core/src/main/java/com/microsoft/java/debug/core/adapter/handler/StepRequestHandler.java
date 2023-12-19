@@ -249,12 +249,8 @@ public class StepRequestHandler implements IDebugRequestHandler {
         long endTime = System.nanoTime();
         JsonObject perf = new JsonObject();
         // THis is useless
-        perf.addProperty("command", "stepHandlerTelemetry");
+        perf.addProperty("command", "setStep");
         perf.addProperty("duration", (endTime - startTime));
-        perf.addProperty("duration_parse_arg", (start1Time - startTime));
-        perf.addProperty("duration_setup_step_handler", (start3Time - start2Time));
-        perf.addProperty("duration_setup_other", (start4Time - start3Time));
-        perf.addProperty("duration_resume", (start5Time - start4Time));
         perf.addProperty("timer_start", startTime);
         perf.addProperty("timer_end", endTime);
         perf.addProperty("version", 1);
@@ -274,7 +270,7 @@ public class StepRequestHandler implements IDebugRequestHandler {
             ThreadState threadState) {
         Event event = debugEvent.event;
         EventRequestManager eventRequestManager = debugSession.getVM().eventRequestManager();
-
+        long startTime = System.nanoTime();
         // When a breakpoint occurs, abort any pending step requests from the same thread.
         if (event instanceof BreakpointEvent || event instanceof ExceptionEvent) {
             // if we have a pending target step in then ignore and continue.
@@ -293,7 +289,7 @@ public class StepRequestHandler implements IDebugRequestHandler {
                 }
             }
         } else if (event instanceof StepEvent) {
-            long startTime = System.nanoTime();
+            
             ThreadReference thread = ((StepEvent) event).thread();
             long threadId = thread.uniqueID();
             threadState.deleteStepRequest(eventRequestManager);
@@ -358,13 +354,6 @@ public class StepRequestHandler implements IDebugRequestHandler {
             if (threadState.eventSubscription != null) {
                 threadState.eventSubscription.dispose();
             }
-            long endTime = System.nanoTime();
-            JsonObject perf = new JsonObject();
-            perf.addProperty("command", "stepHandlerTelemetryStop");
-            perf.addProperty("duration", (endTime - startTime));
-            perf.addProperty("timer_start", startTime);
-            perf.addProperty("timer_end", endTime);
-            context.getProtocolServer().sendEvent(new TelemetryEvent("jb", perf));
             context.getThreadCache().addEventThread(thread, "step");
             context.getProtocolServer().sendEvent(new Events.StoppedEvent("step", thread.uniqueID()));
             debugEvent.shouldResume = false;
@@ -382,6 +371,13 @@ public class StepRequestHandler implements IDebugRequestHandler {
             }
             debugEvent.shouldResume = true;
         }
+        long endTime = System.nanoTime();
+        JsonObject perf = new JsonObject();
+        perf.addProperty("command", "handleStep");
+        perf.addProperty("duration", (endTime - startTime));
+        perf.addProperty("timer_start", startTime);
+        perf.addProperty("timer_end", endTime);
+        context.getProtocolServer().sendEvent(new TelemetryEvent("jb", perf));
     }
 
     private boolean isStoppedAtSelectedMethod(StackFrame frame, MethodInvocation selectedMethod) {

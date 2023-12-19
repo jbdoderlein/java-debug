@@ -101,12 +101,18 @@ public class ProtocolServer extends AbstractProtocolServer {
     public void sendEvent(DebugEvent event) {
         // See the two bugs https://github.com/Microsoft/java-debug/issues/134 and https://github.com/Microsoft/vscode/issues/58327,
         // it requires the java-debug to send the StoppedEvent after ContinueResponse/StepResponse is received by DA.
+        JsonObject telemetry = new JsonObject();
+        telemetry.addProperty("event_send", event.type);
+        telemetry.addProperty("status","outgoing");
+        telemetry.addProperty("timestamp", System.nanoTime());
         if (event instanceof StoppedEvent) {
+            telemetry.addProperty("send_later", "true");
             sendEventLater(event);
         } else {
+            telemetry.addProperty("send_later", "false");
             super.sendEvent(event);
         }
-
+        super.sendEvent(new TelemetryEvent("jb", telemetry));
     }
 
     /**
@@ -118,6 +124,11 @@ public class ProtocolServer extends AbstractProtocolServer {
             if (this.isDispatchingRequest) {
                 this.eventQueue.offer(event);
             } else {
+                JsonObject telemetry = new JsonObject();
+                telemetry.addProperty("event_send", event.type);
+                telemetry.addProperty("status","send_nafter_sched");
+                telemetry.addProperty("timestamp", System.nanoTime());
+                super.sendEvent(new TelemetryEvent("jb", telemetry));
                 super.sendEvent(event);
             }
         }
@@ -126,12 +137,6 @@ public class ProtocolServer extends AbstractProtocolServer {
     @Override
     protected void dispatchRequest(Messages.Request request) {
         usageDataSession.recordRequest(request);
-        JsonObject perf = new JsonObject();
-        perf.addProperty("command", "dispatcher_start_"+request.command);
-        perf.addProperty("time", System.nanoTime());
-        super.sendEvent(new TelemetryEvent("dap", perf));
-        
-        // request.command, System.nanoTime()
         try {
             synchronized (lock) {
                 this.isDispatchingRequest = true;
@@ -140,6 +145,12 @@ public class ProtocolServer extends AbstractProtocolServer {
             debugAdapter.dispatchRequest(request).thenCompose((response) -> {
                 CompletableFuture<Void> future = new CompletableFuture<>();
                 if (response != null) {
+                    JsonObject telemetry = new JsonObject();
+                    telemetry.addProperty("command", request.command);
+                    telemetry.addProperty("status","end");
+                    telemetry.addProperty("seq", request.seq);
+                    telemetry.addProperty("timestamp", System.nanoTime());
+                    super.sendEvent(new TelemetryEvent("jb", telemetry));
                     sendResponse(response);
                     future.complete(null);
                 } else {
@@ -177,14 +188,14 @@ public class ProtocolServer extends AbstractProtocolServer {
             synchronized (lock) {
                 this.isDispatchingRequest = false;
             }
-            JsonObject perf2 = new JsonObject();
-            perf2.addProperty("command", "dispatcher_end_"+request.command);
-            perf2.addProperty("time", System.nanoTime());
-            super.sendEvent(new TelemetryEvent("dap", perf2));
-            //debugAdapter.send_time_over_telemetry("End dispatchRequest"+request.command, System.nanoTime());
             while (this.eventQueue.peek() != null) {
-                super.sendEvent(this.eventQueue.poll());
-                
+                DebugEvent dbe = this.eventQueue.poll();
+                JsonObject telemetry = new JsonObject();
+                telemetry.addProperty("event_send", dbe.type);
+                telemetry.addProperty("status","at_last");
+                telemetry.addProperty("timestamp", System.nanoTime());
+                super.sendEvent(new TelemetryEvent("jb", telemetry));
+                super.sendEvent(dbe);
             }
         }
     }
